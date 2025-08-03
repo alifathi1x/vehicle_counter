@@ -1,0 +1,134 @@
+import cv2
+import numpy as np
+
+
+class VehicleCounter:
+    def __init__(self, lane_name):
+        self.count = 0
+        self.lane_name = lane_name
+
+
+# تعریف لاین‌ها
+lanes = [
+    VehicleCounter("Lane1-Right"),  # لاین سمت راست (رفت)
+    VehicleCounter("Lane2-Middle"),  # لاین وسط (رفت)
+    VehicleCounter("Lane3-Left"),  # لاین سمت چپ (رفت)
+    VehicleCounter("Lane4-Left"),  # لاین سمت چپ (برگشت)
+    VehicleCounter("Lane5-Middle"),  # لاین وسط (برگشت)
+    VehicleCounter("Lane6-Right")  # لاین سمت راست (برگشت)
+]
+
+# خطوط افقی برای تفکیک لاین‌ها (مقادیر Y)
+lane_boundaries = [280, 330, 380, 480, 530, 580, 630]
+
+# تنظیمات اولیه
+video_path = r"C:\Users\Ali\PycharmProjects\PythonProject38/2.mp4"
+cap = cv2.VideoCapture(video_path)
+
+# پارامترهای پردازش تصویر
+background_subtractor = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
+min_contour_width = 40
+min_contour_height = 40
+
+# متغیرهای شمارش
+total_vehicles = 0
+tracked_vehicles = {}  # برای ردیابی خودروهای شناسایی شده
+vehicle_id_counter = 0
+
+
+def assign_to_lane(center_y):
+    """تعیین لاین بر اساس موقعیت عمودی مرکز خودرو"""
+    for i in range(len(lane_boundaries) - 1):
+        if lane_boundaries[i] <= center_y < lane_boundaries[i + 1]:
+            return lanes[min(i, len(lanes) - 1)]
+    return None
+
+
+# پردازش ویدئو
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # پیش‌پردازش تصویر
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # تفریق پس‌زمینه
+    fg_mask = background_subtractor.apply(blur)
+    _, thresh = cv2.threshold(fg_mask, 250, 255, cv2.THRESH_BINARY)
+
+    # مورفولوژی برای حذف نویز
+    kernel = np.ones((5, 5), np.uint8)
+    dilated = cv2.dilate(thresh, kernel, iterations=2)
+
+    # یافتن کانتورها
+    contours, _ = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    # خودروهای شناسایی شده در فریم جاری
+    current_frame_vehicles = {}
+
+    # پردازش کانتورها
+    for contour in contours:
+        (x, y, w, h) = cv2.boundingRect(contour)
+        if w >= min_contour_width and h >= min_contour_height:
+            # محاسبه مرکز خودرو
+            center_x = x + w // 2
+            center_y = y + h // 2
+
+            # رسم کادر سبز دور خودرو
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            # تطبیق با خودروهای ردیابی شده قبلی
+            matched_id = None
+            min_distance = float('inf')
+
+            for vid, last_position in tracked_vehicles.items():
+                dist = np.sqrt((center_x - last_position[0]) ** 2 + (center_y - last_position[1]) ** 2)
+
+                # فاصله کمتر از 25 پیکسل و کمتر از حداقل فاصله قبلی
+                if dist < 100 and dist < min_distance:
+                    min_distance = dist
+                    matched_id = vid
+
+            # تعیین شناسه جدید یا استفاده از شناسه موجود
+            if matched_id is not None:
+                vehicle_id = matched_id
+            else:
+                vehicle_id = vehicle_id_counter
+                vehicle_id_counter += 1
+                total_vehicles += 1
+
+                # اختصاص به لاین و افزایش شمارنده لاین
+                lane = assign_to_lane(center_y)
+                if lane:
+                    lane.count += 1
+
+            # به‌روزرسانی موقعیت خودرو
+            current_frame_vehicles[vehicle_id] = (center_x, center_y)
+
+            # نمایش شناسه خودرو
+            cv2.putText(frame, f"ID: {vehicle_id}", (x, y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+    # به‌روزرسانی دیکشنری ردیابی
+    tracked_vehicles = current_frame_vehicles
+
+    # نمایش اطلاعات شمارش
+    y_offset = 40
+    cv2.putText(frame, f"Total Vehicles: {total_vehicles}", (20, y_offset),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    # نمایش شمارش هر لاین
+    for i, lane in enumerate(lanes):
+        cv2.putText(frame, f"{lane.lane_name}: {lane.count}", (20, y_offset + 40 + i * 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+
+    # نمایش ویدئو
+    cv2.imshow('Vehicle Counting', frame)
+
+    if cv2.waitKey(30) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
