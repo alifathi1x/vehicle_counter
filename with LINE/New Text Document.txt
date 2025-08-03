@@ -1,0 +1,113 @@
+import cv2
+import numpy as np
+
+# پارامترهای برنامه
+LINE_POSITION = 450  # موقعیت خط افقی شمارش
+MIN_CAR_AREA = 100  # حداقل مساحت برای تشخیص خودرو
+DETECTION_INTERVAL = 1  # فریم‌های بین هر تشخیص
+
+
+def detect_cars(frame, background_subtractor):
+    # حذف پس‌زمینه
+    fg_mask = background_subtractor.apply(frame)
+
+    # اعمال مورفولوژی برای بهبود ماسک
+    kernel = np.ones((5, 5), np.uint8)
+    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
+    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+
+    # یافتن کانتورها
+    contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    cars = []
+    for contour in contours:
+        # فیلتر کردن کانتورهای کوچک
+        area = cv2.contourArea(contour)
+        if area > MIN_CAR_AREA:
+            x, y, w, h = cv2.boundingRect(contour)
+            cars.append((x, y, w, h))
+
+    return cars
+
+
+def main():
+    # باز کردن ویدئو
+    cap = cv2.VideoCapture(r"C:\Users\Ali\PycharmProjects\PythonProject38\2.mp4")  # جایگزین با مسیر ویدئوی خود
+
+    # ایجاد subtractor پس‌زمینه
+    background_subtractor = cv2.createBackgroundSubtractorMOG2(history=4, varThreshold=49.7, detectShadows=False)
+
+    # متغیرهای شمارش
+    car_count = 0
+    tracked_cars = {}
+    car_id = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # تشخیص خودروها هر چند فریم یکبار
+        if cap.get(cv2.CAP_PROP_POS_FRAMES) % DETECTION_INTERVAL == 0:
+            cars = detect_cars(frame, background_subtractor)
+
+            # به روزرسانی خودروهای ردیابی شده
+            updated_ids = []
+            for (x, y, w, h) in cars:
+                center = (x + w // 2, y + h // 2)
+
+                # بررسی خودروهای ردیابی شده برای تطابق
+                matched = False
+                for tid, (prev_center, prev_bottom) in tracked_cars.items():
+                    # فاصله بین مرکز جدید و مرکز قبلی
+                    distance = np.sqrt((center[0] - prev_center[0]) ** 2 + (center[1] - prev_center[1]) ** 2)
+
+                    if distance < 50:  # حد آستانه برای تطابق
+                        tracked_cars[tid] = (center, y + h)
+                        updated_ids.append(tid)
+                        matched = True
+                        break
+
+                # اگر تطابقی پیدا نشد، خودروی جدید اضافه می‌شود
+                if not matched:
+                    tracked_cars[car_id] = (center, y + h)
+                    updated_ids.append(car_id)
+                    car_id += 1
+
+            # حذف خودروهایی که دیگر دیده نمی‌شوند
+            for tid in list(tracked_cars.keys()):
+                if tid not in updated_ids:
+                    del tracked_cars[tid]
+
+        # رسم خط شمارش
+        cv2.line(frame, (0, LINE_POSITION), (frame.shape[1], LINE_POSITION), (255, 255, 255), 2)
+
+        # نمایش و شمارش خودروها
+        for tid, (center, bottom) in tracked_cars.items():
+            # رسم مستطیل و نقطه مرکزی
+            x, y = center[0] - 30, bottom - 60  # تقریب برای مختصات مستطیل
+            cv2.rectangle(frame, (x, y), (x + 60, y + 60), (0, 255, 0), 2)
+            cv2.circle(frame, center, 3, (255, 0, 0), -1)
+
+            # شمارش خودروهایی که از خط عبور می‌کنند
+            if bottom > LINE_POSITION and center[1] <= LINE_POSITION:
+                car_count += 1
+                tracked_cars[tid] = (center, frame.shape[0] + 100)  # خارج کردن از محدوده برای جلوگیری از شمارش مجدد
+
+        # نمایش تعداد خودروها
+        cv2.putText(frame, f'Cars Counted: {car_count}', (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+        # نمایش فریم
+        cv2.imshow('Car Counter', frame)
+
+        # خروج با فشار کلید 'q'
+        if cv2.waitKey(30) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    main()
